@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const authRoutes = require('./routes/authRoutes');
 const withdrawalRoutes = require('./routes/withdrawalRoutes');
 const audioRoutes = require('./routes/audioRoutes');
@@ -8,6 +9,7 @@ const mediaRoutes = require('./routes/mediaRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
+const adminStaticPath = path.resolve(__dirname, '../public/admin');
 
 app.use(cors());
 app.use(express.json());
@@ -22,6 +24,15 @@ app.use('/api/audio', audioRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/notifications', notificationRoutes);
+
+app.use(express.static(adminStaticPath));
+app.get('*', (request, response, next) => {
+  if (request.path.startsWith('/api/')) {
+    return next();
+  }
+
+  response.sendFile(path.join(adminStaticPath, 'index.html'));
+});
 
 app.use((error, _request, response, _next) => {
   const statusCode = error.statusCode || 500;

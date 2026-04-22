@@ -18,7 +18,9 @@ async function ingestDeviceNotification(request, response, next) {
       throw createHttpError(400, 'Notification payload is empty.');
     }
 
-    const postedAt = postedAtRaw ? new Date(postedAtRaw) : new Date();
+    const postedAt = postedAtRaw !== undefined && postedAtRaw !== null
+      ? new Date(postedAtRaw)
+      : new Date();
 
     const doc = await UserNotification.create({
       userId: request.authUserId,
@@ -26,6 +28,14 @@ async function ingestDeviceNotification(request, response, next) {
       title,
       text,
       postedAt: Number.isNaN(postedAt.getTime()) ? new Date() : postedAt,
+      notificationKey,
+    });
+
+    // Helps verify ingestion behavior on live deployments.
+    console.log('[notifications] Stored device notification', {
+      id: doc._id.toString(),
+      userId: String(request.authUserId),
+      appPackage,
       notificationKey,
     });
 
@@ -40,6 +50,36 @@ async function ingestDeviceNotification(request, response, next) {
   }
 }
 
+async function getMyDeviceNotifications(request, response, next) {
+  try {
+    const userId = String(request.authUserId || '').trim();
+
+    if (!userId) {
+      throw createHttpError(401, 'Unauthorized request.');
+    }
+
+    const notifications = await UserNotification.find({ userId })
+      .sort({ postedAt: -1 })
+      .limit(300)
+      .select('appPackage title text postedAt notificationKey createdAt');
+
+    response.json({
+      notifications: notifications.map(item => ({
+        id: item._id.toString(),
+        appPackage: item.appPackage,
+        title: item.title,
+        text: item.text,
+        postedAt: item.postedAt,
+        notificationKey: item.notificationKey,
+        createdAt: item.createdAt,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  getMyDeviceNotifications,
   ingestDeviceNotification,
 };
