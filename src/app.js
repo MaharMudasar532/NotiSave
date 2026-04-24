@@ -10,6 +10,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
 const adminStaticPath = path.resolve(__dirname, '../public/admin');
+const privacyPolicyPath = path.resolve(__dirname, '../public/privacy-policy.html');
 
 app.use(cors());
 app.use(express.json());
@@ -24,6 +25,10 @@ app.use('/api/audio', audioRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/notifications', notificationRoutes);
+
+app.get('/privacy-policy', (_request, response) => {
+  response.sendFile(privacyPolicyPath);
+});
 
 app.use(express.static(adminStaticPath));
 app.get('*', (request, response, next) => {

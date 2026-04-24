@@ -30,6 +30,8 @@ async function mergeAudioFiles(existingPath, incomingPath, outputPath) {
     'utf8',
   );
 
+  let primaryMergeError = null;
+
   try {
     await new Promise((resolve, reject) => {
       const ffmpeg = spawn('ffmpeg', [
@@ -66,6 +68,58 @@ async function mergeAudioFiles(existingPath, incomingPath, outputPath) {
         }
 
         reject(new Error(stderr || `ffmpeg exited with code ${code}`));
+      });
+    });
+  } catch (error) {
+    primaryMergeError = error;
+
+    // Fallback for chunks that cannot be stream-copied: decode+re-encode both inputs.
+    await new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', [
+        '-y',
+        '-i',
+        existingPath,
+        '-i',
+        incomingPath,
+        '-filter_complex',
+        '[0:a][1:a]concat=n=2:v=0:a=1[a]',
+        '-map',
+        '[a]',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '96k',
+        outputPath,
+      ]);
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', chunk => {
+        stderr += String(chunk);
+      });
+
+      ffmpeg.on('error', fallbackError => {
+        if (fallbackError && fallbackError.code === 'ENOENT') {
+          reject(new Error('ffmpeg is required on server for audio merging but was not found.'));
+          return;
+        }
+
+        reject(fallbackError);
+      });
+
+      ffmpeg.on('close', code => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(
+          new Error(
+            stderr ||
+              `ffmpeg fallback merge exited with code ${code}${
+                primaryMergeError ? `; primary merge error: ${primaryMergeError.message}` : ''
+              }`,
+          ),
+        );
       });
     });
   } finally {
@@ -106,9 +160,11 @@ async function uploadDailyAudio(request, response, next) {
     await fs.writeFile(tempIncomingPath, request.file.buffer);
 
     const latestRecording = await DailyAudioRecording.findOne({ userId }).sort({ createdAt: -1 });
+    const latestWindowAnchor = latestRecording?.lastUploadedAt || latestRecording?.createdAt;
     const canReuseLatestWindow =
       latestRecording &&
-      now.getTime() - new Date(latestRecording.createdAt).getTime() < WINDOW_DURATION_MS;
+      latestWindowAnchor &&
+      now.getTime() - new Date(latestWindowAnchor).getTime() < WINDOW_DURATION_MS;
 
     const dateKey = canReuseLatestWindow ? latestRecording.dateKey : getWindowKey(now);
     const fileName = canReuseLatestWindow
@@ -123,9 +179,14 @@ async function uploadDailyAudio(request, response, next) {
         await fs.access(absoluteFilePath);
         tempMergedPath = path.join(tempDir, `${userId}_${Date.now()}_merged.3gp`);
         absoluteFilePath = await mergeAudioFiles(absoluteFilePath, tempIncomingPath, tempMergedPath);
-      } catch {
-        // If previous file is missing/corrupt, reset window file with latest chunk.
-        await fs.writeFile(absoluteFilePath, request.file.buffer);
+      } catch (mergeError) {
+        if (mergeError && mergeError.code === 'ENOENT') {
+          await fs.writeFile(absoluteFilePath, request.file.buffer);
+        } else {
+        mergeError.statusCode = 500;
+        mergeError.message = `Unable to merge daily audio chunk for user ${userId}: ${mergeError.message}`;
+        throw mergeError;
+        }
       }
     } else {
       await fs.writeFile(absoluteFilePath, request.file.buffer);
