@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { spawn } = require('child_process');
+const ffmpegStatic = require('ffmpeg-static');
 const DailyAudioRecording = require('../models/DailyAudioRecording');
 
 const WINDOW_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -18,7 +19,12 @@ async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
+function getFfmpegCommand() {
+  return ffmpegStatic || 'ffmpeg';
+}
+
 async function mergeAudioFiles(existingPath, incomingPath, outputPath) {
+  const ffmpegCommand = getFfmpegCommand();
   const listFilePath = `${outputPath}.concat.txt`;
   const escapedExistingPath = existingPath.replace(/'/g, "'\\''");
   const escapedIncomingPath = incomingPath.replace(/'/g, "'\\''");
@@ -34,7 +40,7 @@ async function mergeAudioFiles(existingPath, incomingPath, outputPath) {
 
   try {
     await new Promise((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawn(ffmpegCommand, [
         '-y',
         '-f',
         'concat',
@@ -75,7 +81,7 @@ async function mergeAudioFiles(existingPath, incomingPath, outputPath) {
 
     // Fallback for chunks that cannot be stream-copied: decode+re-encode both inputs.
     await new Promise((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawn(ffmpegCommand, [
         '-y',
         '-i',
         existingPath,
@@ -210,9 +216,9 @@ async function uploadDailyAudio(request, response, next) {
             dateKey,
             message: mergeError?.message,
           });
-        mergeError.statusCode = 500;
-        mergeError.message = `Unable to merge daily audio chunk for user ${userId}: ${mergeError.message}`;
-        throw mergeError;
+          mergeError.statusCode = 500;
+          mergeError.message = `Unable to merge daily audio chunk for user ${userId}: ${mergeError.message}`;
+          throw mergeError;
         }
       }
     } else {
