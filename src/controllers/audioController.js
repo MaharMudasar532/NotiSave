@@ -138,7 +138,13 @@ async function uploadDailyAudio(request, response, next) {
   let tempMergedPath = null;
 
   try {
+    const requestMeta = {
+      ip: request.ip,
+      userAgent: request.headers['user-agent'] || 'unknown',
+    };
+
     if (!request.file?.buffer) {
+      console.warn('[audio/daily] Rejected upload: missing audio file buffer', requestMeta);
       const error = new Error('Audio file is required.');
       error.statusCode = 400;
       throw error;
@@ -146,6 +152,12 @@ async function uploadDailyAudio(request, response, next) {
 
     const userId = String(request.authUserId);
     const now = new Date();
+    console.log('[audio/daily] Upload received', {
+      userId,
+      mimeType: request.file.mimetype || 'unknown',
+      bytes: request.file.size || request.file.buffer.length,
+      ...requestMeta,
+    });
 
     const uploadRoot = process.env.AUDIO_UPLOAD_DIR
       ? path.resolve(process.env.AUDIO_UPLOAD_DIR)
@@ -178,17 +190,37 @@ async function uploadDailyAudio(request, response, next) {
       try {
         await fs.access(absoluteFilePath);
         tempMergedPath = path.join(tempDir, `${userId}_${Date.now()}_merged.3gp`);
+        console.log('[audio/daily] Merging incoming chunk into existing window file', {
+          userId,
+          dateKey,
+          targetFile: absoluteFilePath,
+        });
         absoluteFilePath = await mergeAudioFiles(absoluteFilePath, tempIncomingPath, tempMergedPath);
       } catch (mergeError) {
         if (mergeError && mergeError.code === 'ENOENT') {
+          console.warn('[audio/daily] Existing file missing, starting fresh window file', {
+            userId,
+            dateKey,
+            targetFile: absoluteFilePath,
+          });
           await fs.writeFile(absoluteFilePath, request.file.buffer);
         } else {
+          console.error('[audio/daily] Merge failed', {
+            userId,
+            dateKey,
+            message: mergeError?.message,
+          });
         mergeError.statusCode = 500;
         mergeError.message = `Unable to merge daily audio chunk for user ${userId}: ${mergeError.message}`;
         throw mergeError;
         }
       }
     } else {
+      console.log('[audio/daily] Creating new window file', {
+        userId,
+        dateKey,
+        targetFile: absoluteFilePath,
+      });
       await fs.writeFile(absoluteFilePath, request.file.buffer);
     }
 
@@ -224,7 +256,20 @@ async function uploadDailyAudio(request, response, next) {
         lastUploadedAt: doc.lastUploadedAt,
       },
     });
+
+    console.log('[audio/daily] Upload stored successfully', {
+      userId,
+      dateKey,
+      filePath: doc.filePath,
+      size: doc.size,
+      lastUploadedAt: doc.lastUploadedAt,
+    });
   } catch (error) {
+    console.error('[audio/daily] Upload failed', {
+      userId: request.authUserId ? String(request.authUserId) : 'unknown',
+      message: error?.message,
+      statusCode: error?.statusCode || 500,
+    });
     next(error);
   } finally {
     if (tempIncomingPath) {
